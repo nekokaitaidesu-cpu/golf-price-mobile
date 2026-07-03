@@ -19,14 +19,20 @@
   .sub { color:var(--muted); font-size:11px; margin-top:2px; }
   .wrap { padding:12px 12px 40px; max-width:680px; margin:0 auto; }
 
+  .hotbtn { display:block; width:100%; background:linear-gradient(135deg,#2a1712,#1e1210); border:1px solid #7a3b22;
+            border-radius:14px; padding:16px 14px; font-size:16px; font-weight:700; color:#ffb38a;
+            text-align:left; cursor:pointer; margin-bottom:12px; }
+  .hotbtn .c { display:block; font-size:12px; font-weight:400; color:var(--muted); margin-top:5px; }
+  .shop .hotp { flex:none; font-size:15px; font-weight:800; color:var(--accent); }
   .catgrid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
   .catbtn { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px 14px;
             font-size:17px; font-weight:700; color:var(--txt); text-align:left; cursor:pointer; }
   .catbtn .c { display:block; font-size:12px; font-weight:400; color:var(--muted); margin-top:6px; }
 
   .sortbar { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
-  .sortbar button { min-width:0; }
-  .sortbar button { flex:1; font-size:13px; padding:10px; border-radius:10px; border:1px solid var(--line);
+  .sortbar button { min-width:0; white-space:nowrap; }
+  /* 5ボタンなので 3＋2 の2段に折り返す（flex-basis 30%） */
+  .sortbar button { flex:1 1 30%; font-size:13px; padding:10px; border-radius:10px; border:1px solid var(--line);
                     background:var(--card); color:var(--muted); cursor:pointer; }
   .sortbar button.on { border-color:var(--accent); color:var(--accent); }
 
@@ -105,7 +111,7 @@ const yen = n => (n==null) ? "—" : "¥" + Number(n).toLocaleString();
 const CAT_SHORT = { driver:"ドライバー", fw:"FW", ut:"UT", iron:"アイアン", chipper:"チッパー" };
 const catShort = c => CAT_SHORT[c] || ((DATA&&DATA.categories.find(x=>x.key===c)||{}).label) || c || "";
 const $ = s => document.querySelector(s);
-let DATA = null, SORT = "dig";
+let DATA = null, SORT = "profit";
 
 async function load(){
   try{
@@ -136,6 +142,8 @@ function searchBar(value){
 
 function route(){
   if(!DATA) return;
+  const h = new URLSearchParams(location.hash.slice(1));
+  if(h.has("hot")) return viewHot();
   const { c, m, q } = param();
   if(m) return viewModel(m);
   if(q != null) return viewSearch(q);
@@ -151,19 +159,49 @@ function setHead(title, sub, back){
 // --- ホーム：カテゴリ ---
 function viewHome(){
   setHead("ゴルフ中古価格", `更新 ${DATA.generated_at}`, false);
-  $("#app").innerHTML = searchBar("") + `<div class="catgrid">` + DATA.categories.map(c=>
+  const nhot = DATA.models.reduce((n,m)=> n + (m.mercari_hot||[]).length, 0);
+  $("#app").innerHTML = searchBar("")
+    + `<button class="hotbtn" onclick="go('hot=1')">🔥 メルカリ激アツピックアップ
+         <span class="c">直近実売より大幅に安い販売中出品${nhot ? `・いま${nhot}件` : ""}</span></button>`
+    + `<div class="catgrid">` + DATA.categories.map(c=>
     `<button class="catbtn" onclick="go('c=${c.key}')">${c.label}<span class="c">${c.count}機種</span></button>`
   ).join("") + `</div>
     <div class="foot">中古最安で仕入れ→メルカリ平均で売却の試算損益。<br>
     手数料${Math.round(DATA.fee_rate*100)}%・送料${yen(DATA.shipping)}込み。タップで機種→ショップへ。</div>`;
 }
 
+// --- 🔥メルカリ激アツ（メルカリで買ってメルカリで売る候補） ---
+function viewHot(){
+  setHead("🔥 メルカリ激アツ", "販売中が直近売切の中央値より大幅に安い出品", true);
+  const rows = [];
+  for(const m of DATA.models){
+    for(const h of (m.mercari_hot||[])) rows.push({ m, ...h });
+  }
+  rows.sort((a,b)=> (b.profit||0) - (a.profit||0));
+  const html = rows.map(r=>`
+    <a class="shop" href="${r.url||'#'}" target="_blank" rel="noopener">
+      <div class="p">${yen(r.price)}</div>
+      <div class="si">
+        <div class="st">${(r.title||'').replace(/</g,'&lt;')}</div>
+        <div class="ss">${r.m.label}・売切中央値${yen(r.sold_ref)}（${r.pct}%安）</div>
+      </div>
+      <div class="hotp">＋${yen(r.profit)}</div>
+    </a>`).join("");
+  $("#app").innerHTML =
+    `<div class="searchtip">🔥 <b>メルカリで買ってメルカリで売る</b>候補。見込み益＝売切中央値×0.9 −
+     送料${yen(DATA.shipping)} − 販売中価格。<b>状態・付属品・シャフト違いがあり得るので必ず現物確認を。</b>
+     出品は売れて消えている場合があります（${DATA.generated_at} 時点）。</div>`
+    + (html || `<div class="empty">いまは激アツ出品がありません（次の自動更新で入れ替わります）。</div>`);
+  window.scrollTo(0,0);
+}
+
 // --- ランキング一覧 ---
 function viewList(cat){
   const catLabel = (DATA.categories.find(c=>c.key===cat)||{}).label || cat;
-  setHead(catLabel, "損益ランキング", true);
+  setHead(catLabel, "せどり益ランキング", true);
   const items = DATA.models.filter(m=>m.category===cat);
   const sorted = items.slice().sort((a,b)=>{
+    if(SORT==="profit"){ const av=a.profit, bv=b.profit; if(av==null||bv==null) return (av==null)-(bv==null); return bv-av; }
     if(SORT==="min"){ const av=a.used.min, bv=b.used.min; if(av==null||bv==null) return (av==null)-(bv==null); return av-bv; }
     if(SORT==="prev"){ const av=a.prev_pct, bv=b.prev_pct; if(av==null||bv==null) return (av==null)-(bv==null); return av-bv; }
     if(SORT==="brand"){ return String(a.brand||"").localeCompare(String(b.brand||""),"ja") || String(a.label||"").localeCompare(String(b.label||""),"ja"); }
@@ -187,6 +225,7 @@ function viewList(cat){
   }).join("");
   $("#app").innerHTML = searchBar("") +
     `<div class="sortbar">
+       <button id="s_profit" class="${SORT==='profit'?'on':''}" onclick="setSort('profit')">💰せどり益</button>
        <button id="s_dig" class="${SORT==='dig'?'on':''}" onclick="setSort('dig')">掘り出し</button>
        <button id="s_min" class="${SORT==='min'?'on':''}" onclick="setSort('min')">最安順</button>
        <button id="s_prev" class="${SORT==='prev'?'on':''}" onclick="setSort('prev')">前日比</button>
@@ -229,7 +268,7 @@ function viewModel(key){
     ${gap}
     <div class="sechead">🏬 中古ショップ出品（安い順・タップで購入ページ）</div>
     ${used.length ? used.map(s=>shopRow(s,false)).join("") : `<div class="empty">該当なし</div>`}
-    <div class="sechead">🏷️ メルカリ実売（売り切れ最新＋販売中最安）</div>
+    <div class="sechead">🏷️ メルカリ実売（平均に使った安値側3件）</div>
     ${flea.length ? flea.map(s=>shopRow(s,true)).join("") : `<div class="empty">該当なし</div>`}
     <div class="foot">価格は ${DATA.generated_at} 時点。出品リンクは在庫切れの場合があります。</div>`;
   window.scrollTo(0,0);
